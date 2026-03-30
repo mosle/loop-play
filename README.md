@@ -1,7 +1,37 @@
-# Tauri + React + Typescript
+# Loop Play
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+Desktop app for looping video playback with hotkey/switcher-based video switching.
 
-## Recommended IDE Setup
+## Features
 
-- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
+- Default video loop playback
+- Seamless video switching via switcher UI or global hotkeys
+- Multi-monitor support (fullscreen output on secondary display)
+- Controller UI for playback control
+
+## Setup
+
+```bash
+pnpm install
+pnpm tauri dev
+```
+
+## Config
+
+Define video paths and hotkeys in `config.json`:
+
+```json
+{
+  "default_video": "./videos/loop.mp4",
+  "hotkeys": [
+    { "key": "F1", "label": "Main", "video": "./videos/main.mp4", "loop": false }
+  ],
+  "return_hotkey": "Escape"
+}
+```
+
+`key` and `return_hotkey` are optional (switcher buttons work without hotkeys).
+
+## Stack
+
+Tauri v2 / React / TypeScript / Rust
