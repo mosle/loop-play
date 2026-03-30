@@ -1,0 +1,19 @@
+{
+  "default_video": "./videos/intro.mp4",
+  "hotkeys": [
+    {
+      "_key": "X",
+      "label": "Action 1",
+      "video": "./videos/main.mp4",
+      "loop": false
+    },
+    {
+      "_key": "A",
+      "label": "Action 2",
+      "video": "./videos/leadersboard.mp4",
+      "loop": true
+    }
+  ],
+  "_return_hotkey": "Enter",
+  "fullscreen_monitor": 1
+}

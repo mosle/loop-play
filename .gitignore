@@ -1,0 +1,29 @@
+# Dependencies
+node_modules
+
+# Build output
+dist
+dist-ssr
+
+# Logs
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/*
+!.vscode/extensions.json
+.idea
+*.sw?
+
+# Videos (user content)
+videos/*.mp4
+videos/*.mov
+videos/*.webm
+!videos/.gitkeep
+
+# Local
+*.local
+.claude/
