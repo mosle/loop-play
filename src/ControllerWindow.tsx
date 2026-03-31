@@ -220,7 +220,7 @@ export default function ControllerWindow() {
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
-  const [selectedMonitor, setSelectedMonitor] = useState(0);
+  const [selectedMonitor, setSelectedMonitor] = useState(-1);
   const [playerState, setPlayerState] = useState<PlayerState>({
     currentVideo: "",
     isPlaying: false,
@@ -266,7 +266,6 @@ export default function ControllerWindow() {
           .then((c) => {
             setConfig(c);
             setConfigLoaded(true);
-            setSelectedMonitor(c.fullscreen_monitor);
             setActiveVideo(c.default_video);
             generateThumbnails(c);
           })
@@ -281,6 +280,12 @@ export default function ControllerWindow() {
         if (m.length <= 1) {
           setCompact(true);
           setSelectedMonitor(0);
+        } else {
+          // Use config's fullscreen_monitor if valid, otherwise default to last monitor
+          invoke<AppConfig>("get_config").then((c) => {
+            const idx = c.fullscreen_monitor < m.length ? c.fullscreen_monitor : m.length - 1;
+            setSelectedMonitor(idx);
+          }).catch(() => setSelectedMonitor(0));
         }
       })
       .catch((e) => toast.show(`Failed to get monitors: ${e}`));
@@ -317,11 +322,19 @@ export default function ControllerWindow() {
   const handleConfigLoaded = useCallback((c: AppConfig) => {
     setConfig(c);
     setConfigLoaded(true);
-    setSelectedMonitor(c.fullscreen_monitor);
     setActiveVideo(c.default_video);
-    invoke<MonitorInfo[]>("get_monitors").then(setMonitors).catch(() => {});
+    invoke<MonitorInfo[]>("get_monitors").then((m) => {
+      setMonitors(m);
+      if (m.length <= 1) {
+        setCompact(true);
+        setSelectedMonitor(0);
+      } else {
+        const idx = c.fullscreen_monitor < m.length ? c.fullscreen_monitor : m.length - 1;
+        setSelectedMonitor(idx);
+      }
+    }).catch(() => {});
     generateThumbnails(c);
-  }, [generateThumbnails]);
+  }, [generateThumbnails, setCompact]);
 
   // Listen for player state updates
   useEffect(() => {
@@ -465,7 +478,7 @@ export default function ControllerWindow() {
             })}
           </select>
           {!playerOpen ? (
-            <button className="compact-action" onClick={openPlayer}>
+            <button className="compact-action" onClick={openPlayer} disabled={selectedMonitor < 0}>
               Open
             </button>
           ) : (
@@ -538,8 +551,9 @@ export default function ControllerWindow() {
         <div style={{ marginTop: 10, display: "flex", gap: 8 }}>
           <button
             className="monitor-btn"
-            style={{ flex: 1, background: "#0f3460" }}
+            style={{ flex: 1, background: "#0f3460", opacity: selectedMonitor < 0 ? 0.4 : 1 }}
             onClick={openPlayer}
+            disabled={selectedMonitor < 0}
           >
             {playerOpen ? "Reopen Player" : "Open Player"}
           </button>
