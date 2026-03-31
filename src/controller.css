@@ -306,14 +306,50 @@ html, body, #root {
   text-align: right;
 }
 
-/* Status */
-.status-bar {
-  margin-top: auto;
-  font-size: 11px;
-  color: #666;
+/* Toolbar */
+.toolbar {
   display: flex;
+  align-items: center;
   justify-content: space-between;
-  padding: 8px 0;
+  padding: 6px 10px;
+  background: #111827;
+  border-radius: 6px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.toolbar-status {
+  font-size: 11px;
+  color: #999;
+}
+
+.toolbar-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.toolbar-btn {
+  background: #1a2540;
+  border: 1px solid #2a3550;
+  border-radius: 4px;
+  color: #8899aa;
+  font-size: 11px;
+  padding: 3px 10px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.toolbar-btn:hover {
+  background: #223050;
+  color: #ccc;
+  border-color: #4fc3f7;
 }
 
 .status-dot {
@@ -321,7 +357,6 @@ html, body, #root {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  margin-right: 6px;
 }
 
 .status-dot.connected {
@@ -330,6 +365,118 @@ html, body, #root {
 
 .status-dot.disconnected {
   background: #e63946;
+}
+
+/* Compact mode */
+.controller.compact {
+  padding: 8px;
+  gap: 6px;
+}
+
+.compact-switcher {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.compact-btn {
+  padding: 6px 12px;
+  border: 1px solid #2a2a3e;
+  border-radius: 4px;
+  background: #0f1a2e;
+  color: #aaa;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 600;
+  transition: all 0.15s;
+  white-space: nowrap;
+}
+
+.compact-btn:hover {
+  background: #162640;
+  border-color: #4fc3f7;
+}
+
+.compact-btn.active {
+  background: #162640;
+  border-color: #4fc3f7;
+  color: #4fc3f7;
+}
+
+.compact-btn.compact-loop {
+  background: #0f1f1a;
+  border-color: #1a3a2e;
+}
+
+.compact-btn.compact-loop:hover {
+  border-color: #52b788;
+}
+
+.compact-btn.compact-loop.active {
+  background: #152e24;
+  border-color: #52b788;
+  color: #52b788;
+}
+
+.compact-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.compact-controls .ctrl-btn {
+  font-size: 14px;
+  padding: 2px 6px;
+}
+
+.compact-progress {
+  flex: 1;
+}
+
+.compact-controls .time-display {
+  font-size: 10px;
+  min-width: 30px;
+}
+
+.compact-controls .volume-slider {
+  width: 50px;
+}
+
+.compact-footer {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.compact-action {
+  background: none;
+  border: 1px solid #333;
+  border-radius: 3px;
+  color: #888;
+  font-size: 10px;
+  padding: 2px 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.compact-select {
+  background: #0f1a2e;
+  border: 1px solid #333;
+  border-radius: 3px;
+  color: #aaa;
+  font-size: 10px;
+  padding: 2px 4px;
+  cursor: pointer;
+}
+
+.compact-action:hover {
+  color: #ccc;
+  border-color: #666;
+}
+
+.compact-action.compact-close:hover {
+  color: #e63946;
+  border-color: #e63946;
 }
 
 /* Drop zone */

@@ -233,6 +233,11 @@ export default function ControllerWindow() {
   const [playerOpen, setPlayerOpen] = useState(false);
   const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
   const [mediaInfos, setMediaInfos] = useState<Record<string, MediaInfo>>({});
+  const [compact, setCompactState] = useState(false);
+  const setCompact = useCallback((value: boolean) => {
+    setCompactState(value);
+    invoke("set_compact_mode", { compact: value }).catch(() => {});
+  }, []);
 
   // Check if config exists on mount
   useEffect(() => {
@@ -252,7 +257,10 @@ export default function ControllerWindow() {
       }
     });
     invoke<MonitorInfo[]>("get_monitors")
-      .then(setMonitors)
+      .then((m) => {
+        setMonitors(m);
+        if (m.length <= 1) setCompact(true);
+      })
       .catch((e) => toast.show(`Failed to get monitors: ${e}`));
   }, []);
 
@@ -360,8 +368,122 @@ export default function ControllerWindow() {
     return <ConfigDropZone onConfigLoaded={handleConfigLoaded} />;
   }
 
+  if (compact) {
+    return (
+      <div className="controller compact">
+        {/* Compact Switcher */}
+        <div className="compact-switcher">
+          <button
+            className={`compact-btn compact-loop ${activeVideo === config.default_video ? "active" : ""}`}
+            onClick={returnToLoop}
+            title={config.default_video.split("/").pop()}
+          >
+            Loop
+          </button>
+          {config.hotkeys.map((entry: HotkeyEntry, i: number) => (
+            <button
+              key={entry.key || `entry-${i}`}
+              className={`compact-btn ${activeVideo === entry.video ? "active" : ""}`}
+              onClick={() => switchVideo(entry.video, entry.loop)}
+              title={entry.video.split("/").pop()}
+            >
+              {entry.label}
+              {entry.key && <span className="hotkey-badge">{entry.key}</span>}
+            </button>
+          ))}
+        </div>
+
+        {/* Compact Controls */}
+        <div className="compact-controls">
+          <button
+            className="ctrl-btn"
+            onClick={() => playerControl(playerState.isPlaying ? "pause" : "play")}
+          >
+            {playerState.isPlaying ? "||" : ">"}
+          </button>
+          <div className="progress-bar compact-progress" onClick={handleSeek}>
+            <div
+              className="progress-fill"
+              style={{
+                width: playerState.duration
+                  ? `${(playerState.currentTime / playerState.duration) * 100}%`
+                  : "0%",
+              }}
+            />
+          </div>
+          <span className="time-display">
+            {formatTime(playerState.currentTime)}
+          </span>
+          <input
+            type="range"
+            className="volume-slider"
+            min="0"
+            max="1"
+            step="0.01"
+            value={playerState.masterVolume ?? 1}
+            onChange={(e) => playerControl("master_volume", parseFloat(e.target.value))}
+            title="Master Volume"
+          />
+        </div>
+
+        {/* Compact Footer */}
+        <div className="compact-footer">
+          <select
+            className="compact-select"
+            value={selectedMonitor}
+            onChange={(e) => setSelectedMonitor(Number(e.target.value))}
+          >
+            {monitors.map((m) => {
+              const isBuiltIn = /color lcd|built.?in|internal/i.test(m.name);
+              return (
+                <option key={m.index} value={m.index}>
+                  {isBuiltIn ? "MacBook" : m.name}
+                </option>
+              );
+            })}
+          </select>
+          {!playerOpen ? (
+            <button className="compact-action" onClick={openPlayer}>
+              Open
+            </button>
+          ) : (
+            <button className="compact-action compact-close" onClick={closePlayer}>
+              Close
+            </button>
+          )}
+          <button
+            className="compact-action"
+            onClick={() => setCompact(false)}
+            title="Expand"
+          >
+            &#x25A1;
+          </button>
+        </div>
+        <ToastContainer toasts={toast.toasts} onDismiss={toast.dismiss} />
+      </div>
+    );
+  }
+
   return (
     <div className="controller">
+      {/* Top Toolbar */}
+      <div className="toolbar">
+        <div className="toolbar-left">
+          <span className={`status-dot ${playerOpen ? "connected" : "disconnected"}`} />
+          <span className="toolbar-status">
+            {playerOpen ? "Player active" : "Player not opened"}
+          </span>
+        </div>
+        <div className="toolbar-actions">
+          <button className="toolbar-btn" onClick={() => setCompact(true)}>
+            Compact
+          </button>
+          <button className="toolbar-btn" onClick={reloadConfig}>
+            Config
+          </button>
+        </div>
+      </div>
+
       {/* Monitor Selection */}
       <div className="section">
         <div className="section-title">Output Monitor</div>
@@ -536,19 +658,6 @@ export default function ControllerWindow() {
         </div>
       </div>
 
-      {/* Status */}
-      <div className="status-bar">
-        <span>
-          <span className={`status-dot ${playerOpen ? "connected" : "disconnected"}`} />
-          {playerOpen ? "Player active" : "Player not opened"}
-        </span>
-        <span
-          style={{ cursor: "pointer", textDecoration: "underline" }}
-          onClick={reloadConfig}
-        >
-          Change config
-        </span>
-      </div>
       <ToastContainer toasts={toast.toasts} onDismiss={toast.dismiss} />
     </div>
   );

@@ -514,6 +514,19 @@ fn close_player(app: tauri::AppHandle) {
     }
 }
 
+#[tauri::command]
+fn set_compact_mode(app: tauri::AppHandle, compact: bool) {
+    if let Some(main) = app.get_webview_window("main") {
+        if compact {
+            let _ = main.set_maximizable(false);
+            let _ = main.set_size(tauri::LogicalSize::new(360.0, 120.0));
+        } else {
+            let _ = main.set_maximizable(true);
+            let _ = main.set_size(tauri::LogicalSize::new(480.0, 700.0));
+        }
+    }
+}
+
 fn setup_global_shortcuts(app: &tauri::AppHandle) {
     use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
@@ -602,6 +615,7 @@ pub fn run() {
             get_monitors,
             open_player_on_monitor,
             close_player,
+            set_compact_mode,
         ])
         .setup(|app| {
             // Try to restore last used config
