@@ -1,6 +1,8 @@
 import { useEffect, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { check } from "@tauri-apps/plugin-updater";
+import { relaunch } from "@tauri-apps/plugin-process";
 import type { AppConfig, HotkeyEntry, PlayerState } from "./types";
 import { useToast, ToastContainer } from "./Toast";
 
@@ -237,6 +239,23 @@ export default function ControllerWindow() {
   const setCompact = useCallback((value: boolean) => {
     setCompactState(value);
     invoke("set_compact_mode", { compact: value }).catch(() => {});
+  }, []);
+
+  // Check for updates on mount
+  // Check for updates on mount
+  useEffect(() => {
+    check().then(async (update) => {
+      if (update) {
+        toast.show(`Update ${update.version} available. Installing...`, "info");
+        try {
+          await update.downloadAndInstall();
+          toast.show("Update installed. Restarting...", "info");
+          await relaunch();
+        } catch (e) {
+          toast.show(`Update failed: ${e}`);
+        }
+      }
+    }).catch(() => {}); // Silent fail in dev mode
   }, []);
 
   // Check if config exists on mount

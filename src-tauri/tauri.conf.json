@@ -38,6 +38,15 @@
       "icons/icon.icns",
       "icons/icon.ico"
     ],
-    "resources": []
+    "resources": [],
+    "createUpdaterArtifacts": "v1Compatible"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEZCQTI4MkFEQzg1NzJGNEYKUldSUEwxZklyWUtpKzBkTitvY2F1OVhOWE1wOUR4ajU4U0owYmNLKzk2ZStMeDh5ayt1akZBbUsK",
+      "endpoints": [
+        "https://github.com/mosle/loop-play/releases/latest/download/latest.json"
+      ]
+    }
   }
 }

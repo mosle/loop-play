@@ -206,9 +206,7 @@ fn set_config_path(app: tauri::AppHandle, path: String) -> Result<AppConfig, Str
     let config = load_config_from_path(&config_path)?;
 
     // Save and remember
-    let canonical = config_path
-        .canonicalize()
-        .unwrap_or(config_path.clone());
+    let canonical = config_path.canonicalize().unwrap_or(config_path.clone());
     add_to_history(&app, &canonical);
 
     {
@@ -294,7 +292,10 @@ fn resolve_video_path(app: tauri::AppHandle, path: String) -> Result<String, Str
                 .map_err(|e| format!("Failed to resolve path: {}", e));
         }
     }
-    Err(format!("Video not found: {} (tried {:?})", path, candidates))
+    Err(format!(
+        "Video not found: {} (tried {:?})",
+        path, candidates
+    ))
 }
 
 #[tauri::command]
@@ -349,8 +350,10 @@ fn probe_media(app: tauri::AppHandle, path: String) -> serde_json::Value {
 
     let output = std::process::Command::new(ffprobe)
         .args([
-            "-v", "quiet",
-            "-print_format", "json",
+            "-v",
+            "quiet",
+            "-print_format",
+            "json",
             "-show_format",
             "-show_streams",
             &resolved,
@@ -367,36 +370,71 @@ fn probe_media(app: tauri::AppHandle, path: String) -> serde_json::Value {
                     // Extract video stream info
                     if let Some(streams) = data.get("streams").and_then(|s| s.as_array()) {
                         for stream in streams {
-                            let codec_type = stream.get("codec_type").and_then(|c| c.as_str()).unwrap_or("");
+                            let codec_type = stream
+                                .get("codec_type")
+                                .and_then(|c| c.as_str())
+                                .unwrap_or("");
                             if codec_type == "video" {
-                                result["video_codec"] = stream.get("codec_name").cloned().unwrap_or(serde_json::json!(null));
-                                result["width"] = stream.get("width").cloned().unwrap_or(serde_json::json!(null));
-                                result["height"] = stream.get("height").cloned().unwrap_or(serde_json::json!(null));
+                                result["video_codec"] = stream
+                                    .get("codec_name")
+                                    .cloned()
+                                    .unwrap_or(serde_json::json!(null));
+                                result["width"] = stream
+                                    .get("width")
+                                    .cloned()
+                                    .unwrap_or(serde_json::json!(null));
+                                result["height"] = stream
+                                    .get("height")
+                                    .cloned()
+                                    .unwrap_or(serde_json::json!(null));
                                 // fps from r_frame_rate (e.g. "30/1" or "30000/1001")
-                                if let Some(fps_str) = stream.get("r_frame_rate").and_then(|f| f.as_str()) {
+                                if let Some(fps_str) =
+                                    stream.get("r_frame_rate").and_then(|f| f.as_str())
+                                {
                                     let parts: Vec<&str> = fps_str.split('/').collect();
                                     if parts.len() == 2 {
-                                        if let (Ok(num), Ok(den)) = (parts[0].parse::<f64>(), parts[1].parse::<f64>()) {
+                                        if let (Ok(num), Ok(den)) =
+                                            (parts[0].parse::<f64>(), parts[1].parse::<f64>())
+                                        {
                                             if den > 0.0 {
-                                                result["fps"] = serde_json::json!((num / den * 100.0).round() / 100.0);
+                                                result["fps"] = serde_json::json!(
+                                                    (num / den * 100.0).round() / 100.0
+                                                );
                                             }
                                         }
                                     }
                                 }
                             } else if codec_type == "audio" {
-                                result["audio_codec"] = stream.get("codec_name").cloned().unwrap_or(serde_json::json!(null));
-                                result["sample_rate"] = stream.get("sample_rate").cloned().unwrap_or(serde_json::json!(null));
-                                result["channels"] = stream.get("channels").cloned().unwrap_or(serde_json::json!(null));
+                                result["audio_codec"] = stream
+                                    .get("codec_name")
+                                    .cloned()
+                                    .unwrap_or(serde_json::json!(null));
+                                result["sample_rate"] = stream
+                                    .get("sample_rate")
+                                    .cloned()
+                                    .unwrap_or(serde_json::json!(null));
+                                result["channels"] = stream
+                                    .get("channels")
+                                    .cloned()
+                                    .unwrap_or(serde_json::json!(null));
                             }
                         }
                     }
 
                     // Duration and file size from format
                     if let Some(format) = data.get("format") {
-                        if let Some(dur) = format.get("duration").and_then(|d| d.as_str()).and_then(|d| d.parse::<f64>().ok()) {
+                        if let Some(dur) = format
+                            .get("duration")
+                            .and_then(|d| d.as_str())
+                            .and_then(|d| d.parse::<f64>().ok())
+                        {
                             result["duration"] = serde_json::json!((dur * 100.0).round() / 100.0);
                         }
-                        if let Some(size) = format.get("size").and_then(|s| s.as_str()).and_then(|s| s.parse::<u64>().ok()) {
+                        if let Some(size) = format
+                            .get("size")
+                            .and_then(|s| s.as_str())
+                            .and_then(|s| s.parse::<u64>().ok())
+                        {
                             result["file_size"] = serde_json::json!(size);
                         }
                     }
@@ -414,7 +452,10 @@ fn probe_media(app: tauri::AppHandle, path: String) -> serde_json::Value {
 #[tauri::command]
 fn play_video(app: tauri::AppHandle, video: String, should_loop: bool) {
     if let Some(player) = app.get_webview_window("player") {
-        let _ = player.emit("play-video", serde_json::json!({ "video": video, "loop": should_loop }));
+        let _ = player.emit(
+            "play-video",
+            serde_json::json!({ "video": video, "loop": should_loop }),
+        );
     }
 }
 
@@ -447,7 +488,9 @@ fn update_player_state(app: tauri::AppHandle, state: serde_json::Value) {
 fn get_monitors(app: tauri::AppHandle) -> Vec<serde_json::Value> {
     let monitors = app.available_monitors().unwrap_or_default();
     let primary = app.primary_monitor().ok().flatten();
-    let primary_name = primary.as_ref().and_then(|p| p.name().map(|n| n.to_string()));
+    let primary_name = primary
+        .as_ref()
+        .and_then(|p| p.name().map(|n| n.to_string()));
 
     monitors
         .iter()
@@ -492,15 +535,14 @@ fn open_player_on_monitor(app: tauri::AppHandle, monitor_index: usize) -> Result
         let _ = existing.destroy();
     }
 
-    let player =
-        WebviewWindowBuilder::new(&app, "player", WebviewUrl::App("player.html".into()))
-            .title("Loop Play - Player")
-            .position(logical_x + 1.0, logical_y + 1.0)
-            .inner_size(logical_w - 2.0, logical_h - 2.0)
-            .decorations(false)
-            .always_on_top(true)
-            .build()
-            .map_err(|e| format!("Failed to create player window: {}", e))?;
+    let player = WebviewWindowBuilder::new(&app, "player", WebviewUrl::App("player.html".into()))
+        .title("Loop Play - Player")
+        .position(logical_x + 1.0, logical_y + 1.0)
+        .inner_size(logical_w - 2.0, logical_h - 2.0)
+        .decorations(false)
+        .always_on_top(true)
+        .build()
+        .map_err(|e| format!("Failed to create player window: {}", e))?;
 
     let _ = player.set_fullscreen(true);
 
@@ -549,13 +591,11 @@ fn setup_global_shortcuts(app: &tauri::AppHandle) {
         .iter()
         .filter(|h| !h.key.is_empty())
         .map(|h| h.key.clone())
-        .chain(
-            if config.return_hotkey.is_empty() {
-                None
-            } else {
-                Some(config.return_hotkey.clone())
-            },
-        )
+        .chain(if config.return_hotkey.is_empty() {
+            None
+        } else {
+            Some(config.return_hotkey.clone())
+        })
         .collect();
 
     if shortcuts.is_empty() {
@@ -564,9 +604,9 @@ fn setup_global_shortcuts(app: &tauri::AppHandle) {
 
     let shortcut_refs: Vec<&str> = shortcuts.iter().map(|s| s.as_str()).collect();
 
-    let _ = app.global_shortcut().on_shortcuts(
-        shortcut_refs,
-        move |_app, shortcut, _event| {
+    let _ = app
+        .global_shortcut()
+        .on_shortcuts(shortcut_refs, move |_app, shortcut, _event| {
             let shortcut_str = shortcut.to_string();
 
             if shortcut_str.eq_ignore_ascii_case(&config_clone.return_hotkey) {
@@ -590,15 +630,16 @@ fn setup_global_shortcuts(app: &tauri::AppHandle) {
                     return;
                 }
             }
-        },
-    );
+        });
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(ConfigPath(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_config,

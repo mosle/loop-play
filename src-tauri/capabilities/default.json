@@ -18,6 +18,7 @@
     "core:window:allow-set-focus",
     "core:window:allow-available-monitors",
     "core:webview:allow-set-webview-focus",
-    "core:event:allow-emit-to"
+    "core:event:allow-emit-to",
+    "updater:default"
   ]
 }

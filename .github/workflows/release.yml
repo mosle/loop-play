@@ -61,9 +61,11 @@ jobs:
 
       - run: pnpm install
 
-      - name: Build Tauri app (signed)
+      - name: Build Tauri app (signed + updater)
         env:
           APPLE_SIGNING_IDENTITY: "Developer ID Application: YOUSUKE YASUDA (ZEV53593SB)"
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: pnpm tauri build --target universal-apple-darwin
 
       - name: Notarize app
@@ -75,30 +77,23 @@ jobs:
           BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
           APP_PATH="$BUNDLE_DIR/macos/loop-play.app"
 
-          # Create zip for notarization
           ditto -c -k --keepParent "$APP_PATH" "$RUNNER_TEMP/loop-play.zip"
 
-          # Submit for notarization
           xcrun notarytool submit "$RUNNER_TEMP/loop-play.zip" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
             --team-id "$APPLE_TEAM_ID" \
             --wait
 
-          # Staple the notarization ticket to the app
           xcrun stapler staple "$APP_PATH"
 
           # Re-create DMG with stapled app
           DMG=$(find "$BUNDLE_DIR/dmg" -name "*.dmg" | head -1)
-          if [ -n "$DMG" ]; then
-            rm "$DMG"
-          fi
+          if [ -n "$DMG" ]; then rm "$DMG"; fi
 
-          # Create new DMG
           DMG_NAME="loop-play_${{ steps.version.outputs.VERSION }}_universal.dmg"
           hdiutil create -volname "Loop Play" -srcfolder "$APP_PATH" -ov -format UDZO "$BUNDLE_DIR/dmg/$DMG_NAME"
 
-          # Notarize DMG too
           xcrun notarytool submit "$BUNDLE_DIR/dmg/$DMG_NAME" \
             --apple-id "$APPLE_ID" \
             --password "$APPLE_PASSWORD" \
@@ -107,18 +102,53 @@ jobs:
 
           xcrun stapler staple "$BUNDLE_DIR/dmg/$DMG_NAME"
 
+      - name: Generate updater JSON
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
+
+          # Find the .tar.gz updater artifact and its .sig
+          TAR_GZ=$(find "$BUNDLE_DIR/macos" -name "*.tar.gz" | head -1)
+          SIG=$(cat "${TAR_GZ}.sig")
+          URL="https://github.com/mosle/loop-play/releases/download/${{ github.ref_name }}/loop-play_universal.app.tar.gz"
+
+          cat > "$BUNDLE_DIR/latest.json" << EOF
+          {
+            "version": "${VERSION}",
+            "notes": "Loop Play ${VERSION}",
+            "pub_date": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+            "platforms": {
+              "darwin-universal": {
+                "signature": "${SIG}",
+                "url": "${URL}"
+              },
+              "darwin-aarch64": {
+                "signature": "${SIG}",
+                "url": "${URL}"
+              },
+              "darwin-x86_64": {
+                "signature": "${SIG}",
+                "url": "${URL}"
+              }
+            }
+          }
+          EOF
+
+          cat "$BUNDLE_DIR/latest.json"
+
       - name: Create release and upload assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
           DMG=$(find "$BUNDLE_DIR/dmg" -name "*.dmg" | head -1)
-          APP_DIR="$BUNDLE_DIR/macos"
 
-          tar czf "$APP_DIR/loop-play_universal.app.tar.gz" -C "$APP_DIR" "loop-play.app"
+          # Find the updater tar.gz
+          TAR_GZ=$(find "$BUNDLE_DIR/macos" -name "*.tar.gz" | head -1)
 
           gh release create "${{ github.ref_name }}" \
             --title "Loop Play ${{ github.ref_name }}" \
             --draft \
             "$DMG" \
-            "$APP_DIR/loop-play_universal.app.tar.gz"
+            "$TAR_GZ" \
+            "$BUNDLE_DIR/latest.json"
