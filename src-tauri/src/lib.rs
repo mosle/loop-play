@@ -326,7 +326,28 @@ fn probe_media(app: tauri::AppHandle, path: String) -> serde_json::Value {
         }
     };
 
-    let output = std::process::Command::new("ffprobe")
+    // Find ffprobe — .app bundles have a restricted PATH
+    let ffprobe = [
+        "ffprobe",
+        "/opt/homebrew/bin/ffprobe",
+        "/usr/local/bin/ffprobe",
+        "/usr/bin/ffprobe",
+    ]
+    .iter()
+    .find(|p| {
+        std::process::Command::new(p)
+            .arg("-version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    });
+
+    let ffprobe = match ffprobe {
+        Some(p) => *p,
+        None => return serde_json::json!(null),
+    };
+
+    let output = std::process::Command::new(ffprobe)
         .args([
             "-v", "quiet",
             "-print_format", "json",
