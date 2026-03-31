@@ -2,6 +2,95 @@ import { useEffect, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppConfig, HotkeyEntry, PlayerState } from "./types";
+import { useToast, ToastContainer } from "./Toast";
+
+function toAssetUrl(absolutePath: string): string {
+  if (absolutePath.startsWith("asset://") || absolutePath.startsWith("http")) {
+    return absolutePath;
+  }
+  return `asset://localhost/${absolutePath}`;
+}
+
+function extractThumbnail(videoPath: string, seekTime = 0.5): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement("video");
+    video.crossOrigin = "anonymous";
+    video.muted = true;
+    video.preload = "auto";
+    video.src = toAssetUrl(videoPath);
+
+    video.addEventListener("loadeddata", () => {
+      video.currentTime = Math.min(seekTime, video.duration * 0.1 || seekTime);
+    });
+
+    video.addEventListener("seeked", () => {
+      try {
+        const canvas = document.createElement("canvas");
+        canvas.width = 160;
+        canvas.height = 90;
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const dataUrl = canvas.toDataURL("image/jpeg", 0.7);
+        video.removeAttribute("src");
+        video.load();
+        resolve(dataUrl);
+      } catch (e) {
+        reject(e);
+      }
+    });
+
+    video.addEventListener("error", () => {
+      reject(new Error("Failed to load video for thumbnail"));
+    });
+
+    // Timeout fallback
+    setTimeout(() => reject(new Error("Thumbnail extraction timeout")), 5000);
+  });
+}
+
+interface MediaInfo {
+  video_codec?: string;
+  audio_codec?: string;
+  width?: number;
+  height?: number;
+  fps?: number;
+  duration?: number;
+  file_size?: number;
+  sample_rate?: string;
+  channels?: number;
+}
+
+function formatDuration(sec: number): string {
+  const m = Math.floor(sec / 60);
+  const s = Math.floor(sec % 60);
+  return `${m}:${s.toString().padStart(2, "0")}`;
+}
+
+function formatSize(bytes: number): string {
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)}KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)}MB`;
+}
+
+function MediaBadge({ info, type = "video" }: { info?: MediaInfo; type?: "video" | "audio" }) {
+  if (!info) return null;
+  const parts: string[] = [];
+  if (type === "video") {
+    if (info.width && info.height) parts.push(`${info.width}x${info.height}`);
+    if (info.duration) parts.push(formatDuration(info.duration));
+    if (info.fps) parts.push(`${info.fps}fps`);
+    if (info.video_codec) parts.push(info.video_codec);
+    if (info.audio_codec) parts.push(info.audio_codec);
+    if (info.file_size) parts.push(formatSize(info.file_size));
+  } else {
+    if (info.duration) parts.push(formatDuration(info.duration));
+    if (info.audio_codec) parts.push(info.audio_codec);
+    if (info.sample_rate) parts.push(`${info.sample_rate}Hz`);
+    if (info.channels) parts.push(`${info.channels}ch`);
+    if (info.file_size) parts.push(formatSize(info.file_size));
+  }
+  if (parts.length === 0) return null;
+  return <span className="switch-meta">{parts.join(" · ")}</span>;
+}
 
 interface MonitorInfo {
   index: number;
@@ -125,6 +214,7 @@ function ConfigDropZone({ onConfigLoaded }: { onConfigLoaded: (config: AppConfig
 }
 
 export default function ControllerWindow() {
+  const toast = useToast();
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [configLoaded, setConfigLoaded] = useState(false);
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
@@ -141,6 +231,8 @@ export default function ControllerWindow() {
   });
   const [activeVideo, setActiveVideo] = useState<string>("");
   const [playerOpen, setPlayerOpen] = useState(false);
+  const [thumbnails, setThumbnails] = useState<Record<string, string>>({});
+  const [mediaInfos, setMediaInfos] = useState<Record<string, MediaInfo>>({});
 
   // Check if config exists on mount
   useEffect(() => {
@@ -152,6 +244,7 @@ export default function ControllerWindow() {
             setConfigLoaded(true);
             setSelectedMonitor(c.fullscreen_monitor);
             setActiveVideo(c.default_video);
+            generateThumbnails(c);
           })
           .catch(() => setConfigLoaded(false));
       } else {
@@ -160,7 +253,35 @@ export default function ControllerWindow() {
     });
     invoke<MonitorInfo[]>("get_monitors")
       .then(setMonitors)
-      .catch((e) => console.error("Failed to get monitors:", e));
+      .catch((e) => toast.show(`Failed to get monitors: ${e}`));
+  }, []);
+
+  // Generate thumbnails and probe media info for all videos in config
+  const generateThumbnails = useCallback(async (c: AppConfig) => {
+    const videos = [c.default_video, ...c.hotkeys.map((h) => h.video)];
+    const allPaths = c.loop_audio
+      ? [...videos, c.loop_audio.path]
+      : videos;
+
+    const thumbs: Record<string, string> = {};
+    const infos: Record<string, MediaInfo> = {};
+
+    for (const v of allPaths) {
+      try {
+        const resolved = await invoke<string>("resolve_video_path", { path: v });
+        // Thumbnail only for videos
+        if (videos.includes(v)) {
+          try {
+            thumbs[v] = await extractThumbnail(resolved);
+          } catch { /* skip */ }
+        }
+        // Probe media info
+        const info = await invoke<MediaInfo | null>("probe_media", { path: v });
+        if (info) infos[v] = info;
+      } catch { /* skip */ }
+    }
+    setThumbnails(thumbs);
+    setMediaInfos(infos);
   }, []);
 
   const handleConfigLoaded = useCallback((c: AppConfig) => {
@@ -168,9 +289,9 @@ export default function ControllerWindow() {
     setConfigLoaded(true);
     setSelectedMonitor(c.fullscreen_monitor);
     setActiveVideo(c.default_video);
-    // Refresh monitors
     invoke<MonitorInfo[]>("get_monitors").then(setMonitors).catch(() => {});
-  }, []);
+    generateThumbnails(c);
+  }, [generateThumbnails]);
 
   // Listen for player state updates
   useEffect(() => {
@@ -187,7 +308,7 @@ export default function ControllerWindow() {
       await invoke("open_player_on_monitor", { monitorIndex: selectedMonitor });
       setPlayerOpen(true);
     } catch (e) {
-      console.error("Failed to open player:", e);
+      toast.show(`Failed to open player: ${e}`);
     }
   }, [selectedMonitor]);
 
@@ -196,14 +317,14 @@ export default function ControllerWindow() {
       await invoke("close_player");
       setPlayerOpen(false);
     } catch (e) {
-      console.error("Failed to close player:", e);
+      toast.show(`Failed to close player: ${e}`);
     }
   }, []);
 
   const switchVideo = useCallback((video: string, shouldLoop: boolean) => {
     setActiveVideo(video);
     invoke("play_video", { video, shouldLoop }).catch((e) =>
-      console.error("Failed to switch video:", e)
+      toast.show(`Failed to switch video: ${e}`)
     );
   }, []);
 
@@ -211,14 +332,14 @@ export default function ControllerWindow() {
     if (config) {
       setActiveVideo(config.default_video);
       invoke("return_to_loop").catch((e) =>
-        console.error("Failed to return to loop:", e)
+        toast.show(`Failed to return to loop: ${e}`)
       );
     }
   }, [config]);
 
   const playerControl = useCallback((action: string, value?: number) => {
     invoke("player_control", { action, value: value ?? null }).catch((e) =>
-      console.error("player_control failed:", e)
+      toast.show(`Player control failed: ${e}`)
     );
   }, []);
 
@@ -298,10 +419,27 @@ export default function ControllerWindow() {
             className={`switch-btn loop-btn ${activeVideo === config.default_video ? "active" : ""}`}
             onClick={returnToLoop}
           >
-            Default Loop
-            {config.return_hotkey && <span className="hotkey-badge">{config.return_hotkey}</span>}
-            <br />
-            <small className="switch-filename">{config.default_video.split("/").pop()}</small>
+            <div className="switch-thumb-wrap">
+              {thumbnails[config.default_video]
+                ? <img className="switch-thumb" src={thumbnails[config.default_video]} alt="" />
+                : <div className="switch-thumb switch-thumb-loading" />}
+            </div>
+            <div className="switch-info">
+              <span>
+                Default Loop
+                {config.return_hotkey && <span className="hotkey-badge">{config.return_hotkey}</span>}
+              </span>
+              <small className="switch-filename">{config.default_video.split("/").pop()}</small>
+              <MediaBadge info={mediaInfos[config.default_video]} />
+              {config.loop_audio && (
+                <small className="switch-audio">
+                  Audio: {config.loop_audio.path.split("/").pop()}
+                  {mediaInfos[config.loop_audio.path] && (
+                    <> &middot; <MediaBadge info={mediaInfos[config.loop_audio.path]} type="audio" /></>
+                  )}
+                </small>
+              )}
+            </div>
           </button>
           {config.hotkeys.map((entry: HotkeyEntry, i: number) => (
             <button
@@ -309,10 +447,19 @@ export default function ControllerWindow() {
               className={`switch-btn ${activeVideo === entry.video ? "active" : ""}`}
               onClick={() => switchVideo(entry.video, entry.loop)}
             >
-              {entry.label}
-              {entry.key && <span className="hotkey-badge">{entry.key}</span>}
-              <br />
-              <small className="switch-filename">{entry.video.split("/").pop()}</small>
+              <div className="switch-thumb-wrap">
+                {thumbnails[entry.video]
+                  ? <img className="switch-thumb" src={thumbnails[entry.video]} alt="" />
+                  : <div className="switch-thumb switch-thumb-loading" />}
+              </div>
+              <div className="switch-info">
+                <span>
+                  {entry.label}
+                  {entry.key && <span className="hotkey-badge">{entry.key}</span>}
+                </span>
+                <small className="switch-filename">{entry.video.split("/").pop()}</small>
+                <MediaBadge info={mediaInfos[entry.video]} />
+              </div>
             </button>
           ))}
         </div>
@@ -402,6 +549,7 @@ export default function ControllerWindow() {
           Change config
         </span>
       </div>
+      <ToastContainer toasts={toast.toasts} onDismiss={toast.dismiss} />
     </div>
   );
 }
