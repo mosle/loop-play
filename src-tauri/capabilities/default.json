@@ -16,6 +16,8 @@
     "core:window:allow-close",
     "core:window:allow-set-fullscreen",
     "core:window:allow-set-focus",
-    "core:window:allow-available-monitors"
+    "core:window:allow-available-monitors",
+    "core:webview:allow-set-webview-focus",
+    "core:event:allow-emit-to"
   ]
 }

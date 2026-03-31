@@ -23,33 +23,153 @@ function formatTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
+interface HistoryEntry {
+  path: string;
+  name: string;
+  dir: string;
+  exists: boolean;
+}
+
+function ConfigDropZone({ onConfigLoaded }: { onConfigLoaded: (config: AppConfig) => void }) {
+  const [dragging, setDragging] = useState(false);
+  const [error, setError] = useState("");
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+
+  // Load history on mount
+  useEffect(() => {
+    invoke<HistoryEntry[]>("get_config_history").then(setHistory).catch(() => {});
+  }, []);
+
+  const selectFromHistory = async (path: string) => {
+    setError("");
+    try {
+      const config = await invoke<AppConfig>("set_config_path", { path });
+      onConfigLoaded(config);
+    } catch (err) {
+      setError(String(err));
+      // Refresh history (removes invalid entries)
+      invoke<HistoryEntry[]>("clean_config_history").then(setHistory).catch(() => {});
+    }
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setDragging(false);
+    setError("");
+
+    const files = e.dataTransfer.files;
+    if (files.length === 0) return;
+
+    const file = files[0];
+    const path = (file as any).path || file.name;
+
+    try {
+      const config = await invoke<AppConfig>("set_config_path", { path });
+      onConfigLoaded(config);
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  // Listen for Tauri's file drop events
+  useEffect(() => {
+    const unlisten = listen<{ paths: string[] }>("tauri://drag-drop", async (event) => {
+      const paths = event.payload.paths;
+      if (paths.length === 0) return;
+      setError("");
+      try {
+        const config = await invoke<AppConfig>("set_config_path", { path: paths[0] });
+        onConfigLoaded(config);
+      } catch (err) {
+        setError(String(err));
+      }
+    });
+    return () => {
+      unlisten.then((f) => f());
+    };
+  }, [onConfigLoaded]);
+
+  return (
+    <div className="controller" style={{ justifyContent: "center", alignItems: "center", gap: 16 }}>
+      <div
+        className={`drop-zone ${dragging ? "dragging" : ""}`}
+        onDragOver={(e) => {
+          e.preventDefault();
+          setDragging(true);
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={handleDrop}
+      >
+        <div className="drop-icon">&#x1F4C4;</div>
+        <div className="drop-text">Drop config.json here</div>
+        <div className="drop-hint">or drag any .json config file</div>
+        {error && <div className="drop-error">{error}</div>}
+      </div>
+      {history.length > 0 && (
+        <div className="history-section">
+          <div className="section-title">Recent</div>
+          {history.map((entry) => (
+            <button
+              key={entry.path}
+              className="history-btn"
+              onClick={() => selectFromHistory(entry.path)}
+            >
+              <span className="history-name">{entry.name}</span>
+              <span className="history-dir">{entry.dir}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ControllerWindow() {
   const [config, setConfig] = useState<AppConfig | null>(null);
+  const [configLoaded, setConfigLoaded] = useState(false);
   const [monitors, setMonitors] = useState<MonitorInfo[]>([]);
   const [selectedMonitor, setSelectedMonitor] = useState(0);
   const [playerState, setPlayerState] = useState<PlayerState>({
     currentVideo: "",
     isPlaying: false,
     isLooping: true,
+    masterVolume: 1,
     volume: 1,
     currentTime: 0,
     duration: 0,
+    audioVolume: 0.5,
   });
   const [activeVideo, setActiveVideo] = useState<string>("");
   const [playerOpen, setPlayerOpen] = useState(false);
 
-  // Load config and monitors
+  // Check if config exists on mount
   useEffect(() => {
-    invoke<AppConfig>("get_config")
-      .then((c) => {
-        setConfig(c);
-        setSelectedMonitor(c.fullscreen_monitor);
-        setActiveVideo(c.default_video);
-      })
-      .catch((e) => console.error("Failed to load config:", e));
+    invoke<boolean>("has_config").then((has) => {
+      if (has) {
+        invoke<AppConfig>("get_config")
+          .then((c) => {
+            setConfig(c);
+            setConfigLoaded(true);
+            setSelectedMonitor(c.fullscreen_monitor);
+            setActiveVideo(c.default_video);
+          })
+          .catch(() => setConfigLoaded(false));
+      } else {
+        setConfigLoaded(false);
+      }
+    });
     invoke<MonitorInfo[]>("get_monitors")
       .then(setMonitors)
       .catch((e) => console.error("Failed to get monitors:", e));
+  }, []);
+
+  const handleConfigLoaded = useCallback((c: AppConfig) => {
+    setConfig(c);
+    setConfigLoaded(true);
+    setSelectedMonitor(c.fullscreen_monitor);
+    setActiveVideo(c.default_video);
+    // Refresh monitors
+    invoke<MonitorInfo[]>("get_monitors").then(setMonitors).catch(() => {});
   }, []);
 
   // Listen for player state updates
@@ -109,12 +229,14 @@ export default function ControllerWindow() {
     playerControl("seek", ratio * playerState.duration);
   };
 
-  if (!config) {
-    return (
-      <div className="controller" style={{ justifyContent: "center", alignItems: "center" }}>
-        Loading config...
-      </div>
-    );
+  const reloadConfig = useCallback(async () => {
+    setConfig(null);
+    setConfigLoaded(false);
+  }, []);
+
+  // Show drop zone if no config
+  if (!configLoaded || !config) {
+    return <ConfigDropZone onConfigLoaded={handleConfigLoaded} />;
   }
 
   return (
@@ -181,9 +303,9 @@ export default function ControllerWindow() {
             <br />
             <small className="switch-filename">{config.default_video.split("/").pop()}</small>
           </button>
-          {config.hotkeys.map((entry: HotkeyEntry) => (
+          {config.hotkeys.map((entry: HotkeyEntry, i: number) => (
             <button
-              key={entry.key}
+              key={entry.key || `entry-${i}`}
               className={`switch-btn ${activeVideo === entry.video ? "active" : ""}`}
               onClick={() => switchVideo(entry.video, entry.loop)}
             >
@@ -220,8 +342,23 @@ export default function ControllerWindow() {
             <span className="time-display">
               {formatTime(playerState.currentTime)} / {formatTime(playerState.duration)}
             </span>
-            <div className="volume-control">
-              <span style={{ fontSize: 14 }}>Vol</span>
+          </div>
+          <div className="mixer-section">
+            <div className="mixer-row">
+              <span className="volume-label-ctrl">Master</span>
+              <input
+                type="range"
+                className="volume-slider"
+                min="0"
+                max="1"
+                step="0.01"
+                value={playerState.masterVolume ?? 1}
+                onChange={(e) => playerControl("master_volume", parseFloat(e.target.value))}
+              />
+              <span className="volume-value">{Math.round((playerState.masterVolume ?? 1) * 100)}%</span>
+            </div>
+            <div className="mixer-row">
+              <span className="volume-label-ctrl">Video</span>
               <input
                 type="range"
                 className="volume-slider"
@@ -231,7 +368,23 @@ export default function ControllerWindow() {
                 value={playerState.volume}
                 onChange={(e) => playerControl("volume", parseFloat(e.target.value))}
               />
+              <span className="volume-value">{Math.round(playerState.volume * 100)}%</span>
             </div>
+            {config.loop_audio && (
+              <div className="mixer-row">
+                <span className="volume-label-ctrl">Audio</span>
+                <input
+                  type="range"
+                  className="volume-slider"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={playerState.audioVolume ?? 0.5}
+                  onChange={(e) => playerControl("audio_volume", parseFloat(e.target.value))}
+                />
+                <span className="volume-value">{Math.round((playerState.audioVolume ?? 0.5) * 100)}%</span>
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -242,7 +395,12 @@ export default function ControllerWindow() {
           <span className={`status-dot ${playerOpen ? "connected" : "disconnected"}`} />
           {playerOpen ? "Player active" : "Player not opened"}
         </span>
-        <span>{playerState.isLooping ? "Loop" : "One-shot"}</span>
+        <span
+          style={{ cursor: "pointer", textDecoration: "underline" }}
+          onClick={reloadConfig}
+        >
+          Change config
+        </span>
       </div>
     </div>
   );

@@ -98,6 +98,12 @@ html, body, #root {
   color: rgba(255, 255, 255, 0.8);
 }
 
+.volume-label {
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.5);
+  margin-left: 8px;
+}
+
 .volume-slider {
   width: 80px;
   height: 4px;

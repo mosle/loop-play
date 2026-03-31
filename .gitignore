@@ -27,3 +27,4 @@ videos/*.webm
 # Local
 *.local
 .claude/
+videos/*.mp3

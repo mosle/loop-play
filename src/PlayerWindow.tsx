@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import type { LoopAudioConfig } from "./types";
 
 function formatTime(sec: number): string {
   if (!isFinite(sec)) return "0:00";
@@ -9,7 +10,6 @@ function formatTime(sec: number): string {
   return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
-// Build asset:// URL from absolute file path
 function toAssetUrl(absolutePath: string): string {
   if (absolutePath.startsWith("asset://") || absolutePath.startsWith("http")) {
     return absolutePath;
@@ -23,6 +23,9 @@ export default function PlayerWindow() {
   const videoBRef = useRef<HTMLVideoElement>(null);
   const activeSlotRef = useRef<"A" | "B">("A");
 
+  // Loop audio element
+  const loopAudioRef = useRef<HTMLAudioElement>(null);
+
   const containerRef = useRef<HTMLDivElement>(null);
   const hideTimerRef = useRef<number>(0);
 
@@ -30,7 +33,10 @@ export default function PlayerWindow() {
   const [defaultVideo, setDefaultVideo] = useState("");
   const [isPlaying, setIsPlaying] = useState(true);
   const [isLooping, setIsLooping] = useState(true);
+  const [masterVolume, setMasterVolume] = useState(1);
   const [volume, setVolume] = useState(1);
+  const [audioVolume, setAudioVolume] = useState(0.5);
+  const [hasLoopAudio, setHasLoopAudio] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
   const [currentVideoPath, setCurrentVideoPath] = useState("");
@@ -52,6 +58,20 @@ export default function PlayerWindow() {
     }
   }, []);
 
+  // Manage loop audio: play when looping, pause when one-shot
+  const updateLoopAudio = useCallback(
+    (looping: boolean, playing: boolean) => {
+      const audio = loopAudioRef.current;
+      if (!audio || !hasLoopAudio) return;
+      if (looping && playing) {
+        audio.play().catch(() => {});
+      } else {
+        audio.pause();
+      }
+    },
+    [hasLoopAudio]
+  );
+
   // Switch to a new video seamlessly using the back buffer
   const switchVideo = useCallback(
     (resolvedPath: string, shouldLoop: boolean) => {
@@ -65,34 +85,31 @@ export default function PlayerWindow() {
       back.volume = front?.volume ?? volume;
       back.currentTime = 0;
 
-      // Wait until back buffer has enough data to play
       const onCanPlay = () => {
         back.removeEventListener("canplay", onCanPlay);
-        // Swap: bring back to front
         back.style.zIndex = "2";
         back.style.visibility = "visible";
         back.play().catch(() => {});
 
-        // Hide old front
         if (front) {
           front.style.zIndex = "1";
           front.pause();
           front.removeAttribute("src");
-          front.load(); // release memory
+          front.load();
           front.style.visibility = "hidden";
         }
 
-        // Flip active slot
         activeSlotRef.current = activeSlotRef.current === "A" ? "B" : "A";
         setCurrentVideoPath(resolvedPath);
         setIsLooping(shouldLoop);
         setIsPlaying(true);
+        updateLoopAudio(shouldLoop, true);
       };
 
       back.addEventListener("canplay", onCanPlay);
       back.load();
     },
-    [getActiveVideo, getBackVideo, volume]
+    [getActiveVideo, getBackVideo, volume, updateLoopAudio]
   );
 
   // Report state to controller
@@ -104,31 +121,56 @@ export default function PlayerWindow() {
         currentVideo: currentVideoPath,
         isPlaying: video ? !video.paused : false,
         isLooping,
-        volume: video ? video.volume : volume,
+        masterVolume,
+        volume,
         currentTime: video ? video.currentTime : 0,
         duration: video && isFinite(video.duration) ? video.duration : 0,
+        audioVolume,
       },
     }).catch(() => {});
   };
 
-  // Load config on mount — play default video directly on slot A
+  // Load config on mount
   useEffect(() => {
-    invoke<{ default_video: string }>("get_config").then(async (config) => {
-      const resolved = await resolveVideo(config.default_video);
-      setDefaultVideo(resolved);
-      setCurrentVideoPath(resolved);
-      setIsLooping(true);
+    invoke<{ default_video: string; loop_audio?: LoopAudioConfig }>("get_config").then(
+      async (config) => {
+        const resolved = await resolveVideo(config.default_video);
+        setDefaultVideo(resolved);
+        setCurrentVideoPath(resolved);
+        setIsLooping(true);
 
-      // Initial play on slot A directly (no seamless switch needed)
-      const videoA = videoARef.current;
-      if (videoA) {
-        videoA.src = toAssetUrl(resolved);
-        videoA.loop = true;
-        videoA.style.zIndex = "2";
-        videoA.style.visibility = "visible";
-        videoA.play().catch(() => {});
+        // Setup loop audio if configured
+        if (config.loop_audio) {
+          const audioResolved = await resolveVideo(config.loop_audio.path);
+          const audioSrc = toAssetUrl(audioResolved);
+          console.log("Loop audio resolved:", audioResolved, "->", audioSrc);
+          const audio = loopAudioRef.current;
+          if (audio) {
+            audio.src = audioSrc;
+            audio.loop = true;
+            audio.volume = config.loop_audio.volume;
+            setAudioVolume(config.loop_audio.volume);
+            setHasLoopAudio(true);
+            audio.play().catch((e) => console.error("Audio play failed:", e));
+            audio.addEventListener("error", (e) => {
+              console.error("Audio element error:", audio.error?.code, audio.error?.message, e);
+            });
+          } else {
+            console.error("Audio ref is null");
+          }
+        }
+
+        // Initial play on slot A
+        const videoA = videoARef.current;
+        if (videoA) {
+          videoA.src = toAssetUrl(resolved);
+          videoA.loop = true;
+          videoA.style.zIndex = "2";
+          videoA.style.visibility = "visible";
+          videoA.play().catch(() => {});
+        }
       }
-    });
+    );
   }, [resolveVideo]);
 
   // Listen for play-video events
@@ -163,25 +205,48 @@ export default function PlayerWindow() {
       "player-control",
       (event) => {
         const video = getActiveVideo();
-        if (!video) return;
+        const audio = loopAudioRef.current;
         const { action, value } = event.payload;
         switch (action) {
           case "play":
-            video.play();
+            video?.play();
+            updateLoopAudio(isLooping, true);
             break;
           case "pause":
-            video.pause();
+            video?.pause();
+            if (audio) audio.pause();
             break;
           case "toggle":
-            video.paused ? video.play() : video.pause();
+            if (video) {
+              if (video.paused) {
+                video.play();
+                updateLoopAudio(isLooping, true);
+              } else {
+                video.pause();
+                if (audio) audio.pause();
+              }
+            }
             break;
           case "seek":
-            if (value !== undefined) video.currentTime = value;
+            if (video && value !== undefined) video.currentTime = value;
             break;
           case "volume":
             if (value !== undefined) {
-              video.volume = value;
               setVolume(value);
+              if (video) video.volume = value * masterVolume;
+            }
+            break;
+          case "audio_volume":
+            if (value !== undefined) {
+              setAudioVolume(value);
+              if (audio) audio.volume = value * masterVolume;
+            }
+            break;
+          case "master_volume":
+            if (value !== undefined) {
+              setMasterVolume(value);
+              if (video) video.volume = volume * value;
+              if (audio) audio.volume = audioVolume * value;
             }
             break;
         }
@@ -190,7 +255,7 @@ export default function PlayerWindow() {
     return () => {
       unlisten.then((f) => f());
     };
-  }, [getActiveVideo]);
+  }, [getActiveVideo, isLooping, updateLoopAudio, masterVolume, volume, audioVolume]);
 
   // Report state periodically
   useEffect(() => {
@@ -230,25 +295,36 @@ export default function PlayerWindow() {
     const v = parseFloat(e.target.value);
     setVolume(v);
     const video = getActiveVideo();
-    if (video) video.volume = v;
+    if (video) video.volume = v * masterVolume;
+  };
+
+  const handleAudioVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const v = parseFloat(e.target.value);
+    setAudioVolume(v);
+    const audio = loopAudioRef.current;
+    if (audio) audio.volume = v * masterVolume;
   };
 
   const togglePlay = () => {
     const video = getActiveVideo();
     if (!video) return;
-    video.paused ? video.play() : video.pause();
+    if (video.paused) {
+      video.play();
+      updateLoopAudio(isLooping, true);
+    } else {
+      video.pause();
+      const audio = loopAudioRef.current;
+      if (audio) audio.pause();
+    }
   };
 
-  // When a non-loop video ends, seamlessly return to default loop
   const handleVideoEnded = (slot: "A" | "B") => {
-    // Only handle if this is the currently active slot
     if (slot !== activeSlotRef.current) return;
     if (!isLooping && defaultVideo) {
       switchVideo(defaultVideo, true);
     }
   };
 
-  // Shared video element props for time tracking
   const activeVideoProps = (slot: "A" | "B") => ({
     onTimeUpdate: () => {
       if (slot === activeSlotRef.current) handleTimeUpdate();
@@ -281,6 +357,7 @@ export default function PlayerWindow() {
         style={{ zIndex: 1, visibility: "hidden" }}
         {...activeVideoProps("B")}
       />
+      <audio ref={loopAudioRef} />
       <div className="player-overlay">
         <div className="progress-bar" onClick={handleSeek}>
           <div
@@ -295,6 +372,7 @@ export default function PlayerWindow() {
           <span className="time-display">
             {formatTime(currentTime)} / {formatTime(duration)}
           </span>
+          <span className="volume-label">Video</span>
           <input
             type="range"
             className="volume-slider"
@@ -304,6 +382,20 @@ export default function PlayerWindow() {
             value={volume}
             onChange={handleVolumeChange}
           />
+          {hasLoopAudio && (
+            <>
+              <span className="volume-label">Audio</span>
+              <input
+                type="range"
+                className="volume-slider"
+                min="0"
+                max="1"
+                step="0.01"
+                value={audioVolume}
+                onChange={handleAudioVolumeChange}
+              />
+            </>
+          )}
           <span className="now-playing">
             {isLooping ? "Loop" : "One-shot"}
           </span>

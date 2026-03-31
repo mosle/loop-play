@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::PathBuf;
+use std::sync::Mutex;
 use tauri::{Emitter, Manager, WebviewUrl, WebviewWindowBuilder};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -34,9 +35,22 @@ impl From<RawHotkeyEntry> for HotkeyEntry {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LoopAudioConfig {
+    pub path: String,
+    #[serde(default = "default_volume")]
+    pub volume: f64,
+}
+
+fn default_volume() -> f64 {
+    0.5
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct RawAppConfig {
     default_video: String,
+    #[serde(default)]
+    loop_audio: Option<LoopAudioConfig>,
     hotkeys: Vec<RawHotkeyEntry>,
     #[serde(default)]
     return_hotkey: String,
@@ -47,18 +61,22 @@ struct RawAppConfig {
 #[derive(Debug, Clone, Serialize)]
 pub struct AppConfig {
     pub default_video: String,
+    pub loop_audio: Option<LoopAudioConfig>,
     pub hotkeys: Vec<HotkeyEntry>,
     pub return_hotkey: String,
     pub fullscreen_monitor: u32,
+    pub config_dir: String,
 }
 
-impl From<RawAppConfig> for AppConfig {
-    fn from(raw: RawAppConfig) -> Self {
+impl AppConfig {
+    fn from_raw(raw: RawAppConfig, config_dir: PathBuf) -> Self {
         Self {
             default_video: raw.default_video,
+            loop_audio: raw.loop_audio,
             hotkeys: raw.hotkeys.into_iter().map(HotkeyEntry::from).collect(),
             return_hotkey: raw.return_hotkey,
             fullscreen_monitor: raw.fullscreen_monitor,
+            config_dir: config_dir.to_string_lossy().to_string(),
         }
     }
 }
@@ -67,48 +85,206 @@ fn default_monitor() -> u32 {
     1
 }
 
-fn get_config_path(app: &tauri::AppHandle) -> PathBuf {
-    if let Ok(resource_dir) = app.path().resource_dir() {
-        let config_path = resource_dir.join("config.json");
-        if config_path.exists() {
-            return config_path;
-        }
-    }
-    let dev_path = PathBuf::from("../config.json");
-    if dev_path.exists() {
-        return dev_path;
-    }
-    let cwd_path = PathBuf::from("config.json");
-    if cwd_path.exists() {
-        return cwd_path;
-    }
-    PathBuf::from("config.json")
+// Stores the path to the user's chosen config file
+struct ConfigPath(Mutex<Option<PathBuf>>);
+
+fn history_file(app: &tauri::AppHandle) -> PathBuf {
+    let data_dir = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."));
+    data_dir.join("config_history.json")
 }
 
-fn load_config(app: &tauri::AppHandle) -> Result<AppConfig, String> {
-    let path = get_config_path(app);
-    let content = fs::read_to_string(&path)
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ConfigHistory {
+    last: String,
+    recent: Vec<String>,
+}
+
+fn load_history(app: &tauri::AppHandle) -> ConfigHistory {
+    let file = history_file(app);
+    if let Ok(content) = fs::read_to_string(&file) {
+        if let Ok(h) = serde_json::from_str::<ConfigHistory>(&content) {
+            return h;
+        }
+    }
+    // Migrate from old format
+    let old_file = app
+        .path()
+        .app_data_dir()
+        .unwrap_or_else(|_| PathBuf::from("."))
+        .join("last_config_path.txt");
+    if let Ok(path_str) = fs::read_to_string(&old_file) {
+        let path = path_str.trim().to_string();
+        if !path.is_empty() {
+            let _ = fs::remove_file(&old_file);
+            let h = ConfigHistory {
+                last: path.clone(),
+                recent: vec![path],
+            };
+            save_history(app, &h);
+            return h;
+        }
+    }
+    ConfigHistory {
+        last: String::new(),
+        recent: Vec::new(),
+    }
+}
+
+fn save_history(app: &tauri::AppHandle, history: &ConfigHistory) {
+    let file = history_file(app);
+    if let Some(parent) = file.parent() {
+        let _ = fs::create_dir_all(parent);
+    }
+    let _ = fs::write(&file, serde_json::to_string_pretty(history).unwrap());
+}
+
+fn add_to_history(app: &tauri::AppHandle, path: &PathBuf) {
+    let mut history = load_history(app);
+    let path_str = path.to_string_lossy().to_string();
+    history.last = path_str.clone();
+    history.recent.retain(|p| p != &path_str);
+    history.recent.insert(0, path_str);
+    // Keep max 10 entries
+    history.recent.truncate(10);
+    save_history(app, &history);
+}
+
+fn load_saved_config_path(app: &tauri::AppHandle) -> Option<PathBuf> {
+    let history = load_history(app);
+    if history.last.is_empty() {
+        return None;
+    }
+    let path = PathBuf::from(&history.last);
+    if path.exists() {
+        Some(path)
+    } else {
+        None
+    }
+}
+
+fn load_config_from_path(path: &PathBuf) -> Result<AppConfig, String> {
+    let content = fs::read_to_string(path)
         .map_err(|e| format!("Failed to read config from {:?}: {}", path, e))?;
     let raw: RawAppConfig =
         serde_json::from_str(&content).map_err(|e| format!("Failed to parse config: {}", e))?;
-    Ok(AppConfig::from(raw))
+    let config_dir = path.parent().unwrap_or(&PathBuf::from(".")).to_path_buf();
+    Ok(AppConfig::from_raw(raw, config_dir))
+}
+
+fn try_load_config(app: &tauri::AppHandle) -> Result<AppConfig, String> {
+    let state = app.state::<ConfigPath>();
+    let guard = state.0.lock().unwrap();
+    match guard.as_ref() {
+        Some(path) => load_config_from_path(path),
+        None => Err("No config loaded".to_string()),
+    }
 }
 
 #[tauri::command]
 fn get_config(app: tauri::AppHandle) -> Result<AppConfig, String> {
-    load_config(&app)
+    try_load_config(&app)
+}
+
+#[tauri::command]
+fn has_config(app: tauri::AppHandle) -> bool {
+    let state = app.state::<ConfigPath>();
+    let guard = state.0.lock().unwrap();
+    guard.is_some()
+}
+
+#[tauri::command]
+fn set_config_path(app: tauri::AppHandle, path: String) -> Result<AppConfig, String> {
+    let config_path = PathBuf::from(&path);
+    if !config_path.exists() {
+        return Err(format!("File not found: {}", path));
+    }
+
+    // Validate it's a valid config
+    let config = load_config_from_path(&config_path)?;
+
+    // Save and remember
+    let canonical = config_path
+        .canonicalize()
+        .unwrap_or(config_path.clone());
+    add_to_history(&app, &canonical);
+
+    {
+        let state = app.state::<ConfigPath>();
+        let mut guard = state.0.lock().unwrap();
+        *guard = Some(canonical);
+    }
+
+    // Re-register hotkeys
+    setup_global_shortcuts(&app);
+
+    Ok(config)
+}
+
+#[tauri::command]
+fn get_config_history(app: tauri::AppHandle) -> Vec<serde_json::Value> {
+    let history = load_history(&app);
+    history
+        .recent
+        .iter()
+        .filter_map(|p| {
+            let path = PathBuf::from(p);
+            let exists = path.exists();
+            let name = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            let dir = path
+                .parent()
+                .map(|d| d.to_string_lossy().to_string())
+                .unwrap_or_default();
+            if exists {
+                Some(serde_json::json!({
+                    "path": p,
+                    "name": name,
+                    "dir": dir,
+                    "exists": true,
+                }))
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+#[tauri::command]
+fn clean_config_history(app: tauri::AppHandle) -> Vec<serde_json::Value> {
+    let mut history = load_history(&app);
+    history.recent.retain(|p| PathBuf::from(p).exists());
+    if !history.recent.iter().any(|p| p == &history.last) {
+        history.last = history.recent.first().cloned().unwrap_or_default();
+    }
+    save_history(&app, &history);
+    get_config_history(app)
 }
 
 #[tauri::command]
 fn resolve_video_path(app: tauri::AppHandle, path: String) -> Result<String, String> {
-    let candidates: Vec<PathBuf> = vec![
-        app.path().resource_dir().ok().map(|d| d.join(&path)),
-        Some(PathBuf::from("..").join(&path)),
-        Some(PathBuf::from(&path)),
-    ]
-    .into_iter()
-    .flatten()
-    .collect();
+    // Resolve relative to config file's directory
+    let config_dir = {
+        let state = app.state::<ConfigPath>();
+        let guard = state.0.lock().unwrap();
+        guard
+            .as_ref()
+            .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+    };
+
+    let mut candidates: Vec<PathBuf> = Vec::new();
+
+    // 1. Relative to config dir
+    if let Some(dir) = &config_dir {
+        candidates.push(dir.join(&path));
+    }
+
+    // 2. As absolute path
+    candidates.push(PathBuf::from(&path));
 
     for candidate in &candidates {
         if candidate.exists() {
@@ -194,27 +370,15 @@ fn open_player_on_monitor(app: tauri::AppHandle, monitor_index: usize) -> Result
 
     let position = monitor.position();
     let scale = monitor.scale_factor();
-    // Both position and size are in physical pixels — convert to logical
     let logical_x = position.x as f64 / scale;
     let logical_y = position.y as f64 / scale;
     let logical_w = monitor.size().width as f64 / scale;
     let logical_h = monitor.size().height as f64 / scale;
 
-    eprintln!(
-        "Opening player on monitor {} ({}): phys_pos=({},{}) logical_pos=({},{}) logical_size={}x{} scale={}",
-        monitor_index,
-        monitor.name().unwrap_or(&"unknown".to_string()),
-        position.x, position.y,
-        logical_x, logical_y,
-        logical_w, logical_h, scale
-    );
-
-    // Close existing player window if any
     if let Some(existing) = app.get_webview_window("player") {
         let _ = existing.destroy();
     }
 
-    // Create window positioned on the target monitor, then fullscreen
     let player =
         WebviewWindowBuilder::new(&app, "player", WebviewUrl::App("player.html".into()))
             .title("Loop Play - Player")
@@ -225,7 +389,6 @@ fn open_player_on_monitor(app: tauri::AppHandle, monitor_index: usize) -> Result
             .build()
             .map_err(|e| format!("Failed to create player window: {}", e))?;
 
-    // Fullscreen on whichever monitor the window is on
     let _ = player.set_fullscreen(true);
 
     Ok(())
@@ -239,15 +402,18 @@ fn close_player(app: tauri::AppHandle) {
 }
 
 fn setup_global_shortcuts(app: &tauri::AppHandle) {
-    let config = match load_config(app) {
+    use tauri_plugin_global_shortcut::GlobalShortcutExt;
+
+    // Unregister all existing shortcuts first
+    let _ = app.global_shortcut().unregister_all();
+
+    let config = match try_load_config(app) {
         Ok(c) => c,
         Err(e) => {
-            eprintln!("Failed to load config for shortcuts: {}", e);
+            eprintln!("Skipping hotkey setup: {}", e);
             return;
         }
     };
-
-    use tauri_plugin_global_shortcut::GlobalShortcutExt;
 
     let app_handle = app.clone();
     let config_clone = config.clone();
@@ -257,11 +423,16 @@ fn setup_global_shortcuts(app: &tauri::AppHandle) {
         .iter()
         .filter(|h| !h.key.is_empty())
         .map(|h| h.key.clone())
-        .chain(if config.return_hotkey.is_empty() { None } else { Some(config.return_hotkey.clone()) })
+        .chain(
+            if config.return_hotkey.is_empty() {
+                None
+            } else {
+                Some(config.return_hotkey.clone())
+            },
+        )
         .collect();
 
     if shortcuts.is_empty() {
-        eprintln!("No hotkeys configured, skipping global shortcut registration");
         return;
     }
 
@@ -302,8 +473,13 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
+        .manage(ConfigPath(Mutex::new(None)))
         .invoke_handler(tauri::generate_handler![
             get_config,
+            has_config,
+            set_config_path,
+            get_config_history,
+            clean_config_history,
             resolve_video_path,
             play_video,
             return_to_loop,
@@ -314,28 +490,15 @@ pub fn run() {
             close_player,
         ])
         .setup(|app| {
-            // Dump all monitors at startup
-            let monitors = app.available_monitors().unwrap_or_default();
-            eprintln!("=== Available Monitors ({}) ===", monitors.len());
-            for (i, m) in monitors.iter().enumerate() {
-                eprintln!(
-                    "  [{}] name={:?} pos=({},{}) size={}x{} scale={}",
-                    i,
-                    m.name().unwrap_or(&"?".to_string()),
-                    m.position().x,
-                    m.position().y,
-                    m.size().width,
-                    m.size().height,
-                    m.scale_factor()
-                );
+            // Try to restore last used config
+            if let Some(saved_path) = load_saved_config_path(app.handle()) {
+                eprintln!("Restoring config from {:?}", saved_path);
+                let state = app.state::<ConfigPath>();
+                let mut guard = state.0.lock().unwrap();
+                *guard = Some(saved_path);
+                drop(guard);
+                setup_global_shortcuts(app.handle());
             }
-            let primary = app.primary_monitor().ok().flatten();
-            if let Some(p) = &primary {
-                eprintln!("  Primary: {:?}", p.name().unwrap_or(&"?".to_string()));
-            }
-            eprintln!("=============================");
-
-            setup_global_shortcuts(app.handle());
             Ok(())
         })
         .run(tauri::generate_context!())
