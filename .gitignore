@@ -27,4 +27,11 @@ videos/*.webm
 # Local
 *.local
 .claude/
+
+# Certificates & secrets
+*.cer
+*.csr
+*.key
+*.p12
+.env*
 videos/*.mp3

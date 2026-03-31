@@ -27,6 +27,27 @@ jobs:
         run: |
           sed -i '' 's/"version": ".*"/"version": "'${{ steps.version.outputs.VERSION }}'"/' package.json
 
+      - name: Install Apple certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          echo -n "$APPLE_CERTIFICATE" | base64 --decode -o $CERTIFICATE_PATH
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security set-keychain-settings -lut 21600 $KEYCHAIN_PATH
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+
+          security import $CERTIFICATE_PATH -P "$APPLE_CERTIFICATE_PASSWORD" -A -t cert -f pkcs12 -k $KEYCHAIN_PATH
+          security set-key-partition-list -S apple-tool:,apple: -k "$KEYCHAIN_PASSWORD" $KEYCHAIN_PATH
+          security list-keychain -d user -s $KEYCHAIN_PATH
+
+          security find-identity -v -p codesigning $KEYCHAIN_PATH
+
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -40,8 +61,51 @@ jobs:
 
       - run: pnpm install
 
-      - name: Build Tauri app
+      - name: Build Tauri app (signed)
+        env:
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: YOUSUKE YASUDA (ZEV53593SB)"
         run: pnpm tauri build --target universal-apple-darwin
+
+      - name: Notarize app
+        env:
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
+          APP_PATH="$BUNDLE_DIR/macos/loop-play.app"
+
+          # Create zip for notarization
+          ditto -c -k --keepParent "$APP_PATH" "$RUNNER_TEMP/loop-play.zip"
+
+          # Submit for notarization
+          xcrun notarytool submit "$RUNNER_TEMP/loop-play.zip" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          # Staple the notarization ticket to the app
+          xcrun stapler staple "$APP_PATH"
+
+          # Re-create DMG with stapled app
+          DMG=$(find "$BUNDLE_DIR/dmg" -name "*.dmg" | head -1)
+          if [ -n "$DMG" ]; then
+            rm "$DMG"
+          fi
+
+          # Create new DMG
+          DMG_NAME="loop-play_${{ steps.version.outputs.VERSION }}_universal.dmg"
+          hdiutil create -volname "Loop Play" -srcfolder "$APP_PATH" -ov -format UDZO "$BUNDLE_DIR/dmg/$DMG_NAME"
+
+          # Notarize DMG too
+          xcrun notarytool submit "$BUNDLE_DIR/dmg/$DMG_NAME" \
+            --apple-id "$APPLE_ID" \
+            --password "$APPLE_PASSWORD" \
+            --team-id "$APPLE_TEAM_ID" \
+            --wait
+
+          xcrun stapler staple "$BUNDLE_DIR/dmg/$DMG_NAME"
 
       - name: Create release and upload assets
         env:
@@ -49,9 +113,8 @@ jobs:
         run: |
           BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
           DMG=$(find "$BUNDLE_DIR/dmg" -name "*.dmg" | head -1)
-
-          # Create tar.gz of .app
           APP_DIR="$BUNDLE_DIR/macos"
+
           tar czf "$APP_DIR/loop-play_universal.app.tar.gz" -C "$APP_DIR" "loop-play.app"
 
           gh release create "${{ github.ref_name }}" \
