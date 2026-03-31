@@ -278,7 +278,10 @@ export default function ControllerWindow() {
     invoke<MonitorInfo[]>("get_monitors")
       .then((m) => {
         setMonitors(m);
-        if (m.length <= 1) setCompact(true);
+        if (m.length <= 1) {
+          setCompact(true);
+          setSelectedMonitor(0);
+        }
       })
       .catch((e) => toast.show(`Failed to get monitors: ${e}`));
   }, []);

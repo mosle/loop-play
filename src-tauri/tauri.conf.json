@@ -17,6 +17,7 @@
         "width": 480,
         "height": 700,
         "resizable": true,
+        "acceptFirstMouse": true,
         "url": "index.html"
       }
     ],
