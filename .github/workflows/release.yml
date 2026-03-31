@@ -5,11 +5,12 @@ on:
     tags:
       - "v*"
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: macos-latest
-    permissions:
-      contents: write
     steps:
       - uses: actions/checkout@v4
 
@@ -39,11 +40,22 @@ jobs:
 
       - run: pnpm install
 
-      - uses: tauri-apps/tauri-action@v0
+      - name: Build Tauri app
+        run: pnpm tauri build --target universal-apple-darwin
+
+      - name: Create release and upload assets
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          tagName: ${{ github.ref_name }}
-          releaseName: "Loop Play ${{ github.ref_name }}"
-          releaseDraft: true
-          args: --target universal-apple-darwin
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          BUNDLE_DIR="src-tauri/target/universal-apple-darwin/release/bundle"
+          DMG=$(find "$BUNDLE_DIR/dmg" -name "*.dmg" | head -1)
+
+          # Create tar.gz of .app
+          APP_DIR="$BUNDLE_DIR/macos"
+          tar czf "$APP_DIR/loop-play_universal.app.tar.gz" -C "$APP_DIR" "loop-play.app"
+
+          gh release create "${{ github.ref_name }}" \
+            --title "Loop Play ${{ github.ref_name }}" \
+            --draft \
+            "$DMG" \
+            "$APP_DIR/loop-play_universal.app.tar.gz"
