@@ -109,8 +109,9 @@ jobs:
 
           # Find the .tar.gz updater artifact and its .sig
           TAR_GZ=$(find "$BUNDLE_DIR/macos" -name "*.tar.gz" | head -1)
+          TAR_GZ_NAME=$(basename "$TAR_GZ")
           SIG=$(cat "${TAR_GZ}.sig")
-          URL="https://github.com/mosle/loop-play/releases/download/${{ github.ref_name }}/loop-play_universal.app.tar.gz"
+          URL="https://github.com/mosle/loop-play/releases/download/${{ github.ref_name }}/${TAR_GZ_NAME}"
 
           cat > "$BUNDLE_DIR/latest.json" << EOF
           {
