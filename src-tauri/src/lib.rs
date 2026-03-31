@@ -524,6 +524,8 @@ fn open_player_on_monitor(app: tauri::AppHandle, monitor_index: usize) -> Result
         .get(monitor_index)
         .ok_or_else(|| format!("Monitor {} not found", monitor_index))?;
 
+    let single_monitor = monitors.len() <= 1;
+
     let position = monitor.position();
     let scale = monitor.scale_factor();
     let logical_x = position.x as f64 / scale;
@@ -535,16 +537,42 @@ fn open_player_on_monitor(app: tauri::AppHandle, monitor_index: usize) -> Result
         let _ = existing.destroy();
     }
 
-    let player = WebviewWindowBuilder::new(&app, "player", WebviewUrl::App("player.html".into()))
-        .title("Loop Play - Player")
-        .position(logical_x + 1.0, logical_y + 1.0)
-        .inner_size(logical_w - 2.0, logical_h - 2.0)
-        .decorations(false)
-        .always_on_top(true)
-        .build()
-        .map_err(|e| format!("Failed to create player window: {}", e))?;
+    if single_monitor {
+        // Single monitor: windowed mode, no fullscreen
+        // Controller floats on top, player fills the screen behind it
+        let player =
+            WebviewWindowBuilder::new(&app, "player", WebviewUrl::App("player.html".into()))
+                .title("Loop Play - Player")
+                .inner_size(logical_w, logical_h)
+                .decorations(false)
+                .build()
+                .map_err(|e| format!("Failed to create player window: {}", e))?;
 
-    let _ = player.set_fullscreen(true);
+        let _ = player.maximize();
+
+        // Make controller float on top
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.set_always_on_top(true);
+        }
+    } else {
+        // Multi monitor: fullscreen on target monitor
+        let player =
+            WebviewWindowBuilder::new(&app, "player", WebviewUrl::App("player.html".into()))
+                .title("Loop Play - Player")
+                .position(logical_x + 1.0, logical_y + 1.0)
+                .inner_size(logical_w - 2.0, logical_h - 2.0)
+                .decorations(false)
+                .always_on_top(true)
+                .build()
+                .map_err(|e| format!("Failed to create player window: {}", e))?;
+
+        let _ = player.set_fullscreen(true);
+
+        // Controller doesn't need always-on-top with separate monitors
+        if let Some(main) = app.get_webview_window("main") {
+            let _ = main.set_always_on_top(false);
+        }
+    }
 
     Ok(())
 }
@@ -553,6 +581,10 @@ fn open_player_on_monitor(app: tauri::AppHandle, monitor_index: usize) -> Result
 fn close_player(app: tauri::AppHandle) {
     if let Some(player) = app.get_webview_window("player") {
         let _ = player.destroy();
+    }
+    // Reset controller always-on-top
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.set_always_on_top(false);
     }
 }
 
